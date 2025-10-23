@@ -1,4 +1,4 @@
--- KING Rivals Cheat Script (Visibility Aimlock + Lag Optimized)
+-- KING Rivals Cheat Script (Lag Optimized + White Box ESP)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -7,25 +7,25 @@ local localPlayer = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 local mouse = localPlayer:GetMouse()
 
--- Settings (Rivals-tuned, lag-optimized)
+-- Settings (Lag-optimized, 120m ESP)
 local settings = {
-    aimbot = {enabled = false, smoothness = 20, fov = 90, targetPart = "Head", maxDist = 200},  -- Close + visible only
-    esp = {enabled = false, distance = 200, wallCheck = true, showTeam = false},
-    movement = {speedHack = false, speedMultiplier = 1.5, fly = false, bunnyHop = false, bunnyStrength = 60},
+    aimbot = {enabled = false, smoothness = 20, fov = 90, targetPart = "Head", maxDist = 200},
+    esp = {enabled = false, distance = 120, wallCheck = true, showTeam = false},  -- 120m max
+    movement = {speedHack = false, speedMultiplier = 1.5, bunnyHop = false, bunnyStrength = 60},
     aimCircle = {enabled = false, radius = 30, thickness = 2},
     gunSync = true,
-    triggerBot = false,
     antiBlind = true
 }
 
 local keybinds = {aimLock = Enum.KeyCode.LeftShift, menuToggle = Enum.KeyCode.RightAlt}
 local connections = {}
-local espGuis = {}
+local espBoxes = {}  -- For box cleanup
 local remoteHooks = {}
 local currentTarget = nil
-local raycastParams = RaycastParams.new()  -- Cached for lag reduction
+local raycastParams = RaycastParams.new()
 raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
 raycastParams.FilterDescendantsInstances = {localPlayer.Character}
+local aimCircleInstance = nil  -- Single instance for no overlaps
 
 local function printDebug(msg)
     print("[KING Rivals] " .. msg)
@@ -45,14 +45,16 @@ end
 local function getClosestPlayer(fov)
     local origin = camera.CFrame.Position
     local candidates = {}
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= localPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health > 0 and isEnemy(p) then  -- Team check
+    local playerList = Players:GetPlayers()
+    for i = 1, math.min(15, #playerList) do  -- Limit to 15 for lag
+        local p = playerList[i]
+        if p ~= localPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health > 0 and isEnemy(p) then
             local root = p.Character.HumanoidRootPart
             local dist = (root.Position - origin).Magnitude
-            if dist <= settings.aimbot.maxDist then  -- Close only
+            if dist <= settings.aimbot.maxDist then
                 local screenPos, onScreen = camera:WorldToViewportPoint(root.Position)
                 local angle = math.deg(math.asin(math.clamp((Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(mouse.X, mouse.Y)).Magnitude / 2 / math.tan(math.rad(camera.FieldOfView / 2)), 0, 1)))
-                local visible = raycastVisible(origin, root.Position, {p.Character})  -- Visibility check
+                local visible = raycastVisible(origin, root.Position, {p.Character})
                 if onScreen and angle <= fov and visible then
                     table.insert(candidates, {player = p, dist = dist})
                 elseif not isEnemy(p) then
@@ -98,12 +100,11 @@ local function syncGunToTarget(targetPart, tool)
     if not tool or not settings.gunSync then return end
     local handle = tool:FindFirstChild("Handle") or tool:FindFirstChildOfClass("Part")
     if handle then
-        -- Direct CFrame (no tween for lag reduction)
         local lookCFrame = CFrame.lookAt(handle.Position, targetPart.Position)
-        handle.CFrame = lookCFrame
+        handle.CFrame = lookCFrame  -- Direct for lag
         hookFiringRemote(tool, targetPart)
         pcall(function() handle.Recoil.Value = 0 end)
-        printDebug("Gun direct-synced for " .. targetPart.Parent.Name)
+        printDebug("Gun synced for " .. targetPart.Parent.Name)
     end
     mouse.Hit = CFrame.lookAt(Vector3.new(), targetPart.Position)
 end
@@ -127,16 +128,6 @@ local function updateAimbot()
     end
 end
 
-local function updateTriggerBot()
-    if not settings.triggerBot then return end
-    local target = getClosestPlayer(5)  -- Small FOV, visibility + team check
-    if target and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
-        local tool = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Tool")
-        if tool then tool:Activate() end
-        printDebug("Trigger bot fired on visible enemy " .. target.Name)
-    end
-end
-
 local function updateAntiBlind()
     if not settings.antiBlind then return end
     for _, effect in ipairs(workspace:GetDescendants()) do
@@ -150,55 +141,43 @@ end
 
 local function updateESP()
     if not settings.esp.enabled then
-        for _, gui in pairs(espGuis) do gui:Destroy() end
-        espGuis = {}
+        for _, box in pairs(espBoxes) do
+            if box then box:Remove() end
+        end
+        espBoxes = {}
         return
     end
-    for _, p in ipairs(Players:GetPlayers()) do
+    local playerList = Players:GetPlayers()
+    for i = 1, math.min(15, #playerList) do  -- Limit for lag
+        local p = playerList[i]
         if p ~= localPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
             local dist = (p.Character.HumanoidRootPart.Position - camera.CFrame.Position).Magnitude
             local visible = not settings.esp.wallCheck or raycastVisible(camera.CFrame.Position, p.Character.HumanoidRootPart.Position, {p.Character})
             local show = settings.esp.showTeam or isEnemy(p)
             if dist <= settings.esp.distance and visible and show then
-                local gui = espGuis[p.Name]
-                if not gui then
-                    gui = Instance.new("BillboardGui")
-                    gui.Adornee = p.Character.HumanoidRootPart
-                    gui.Size = UDim2.new(0, 100, 0, 50)
-                    gui.StudsOffset = Vector3.new(0, 3, 0)
-                    gui.Parent = p.Character.HumanoidRootPart
-
-                    local nameLabel = Instance.new("TextLabel")
-                    nameLabel.Size = UDim2.new(1, 0, 0.5, 0)
-                    nameLabel.BackgroundTransparency = 1
-                    nameLabel.Text = p.Name
-                    nameLabel.TextColor3 = isEnemy(p) and Color3.new(1, 0, 0) or Color3.new(0, 0, 1)
-                    nameLabel.TextScaled = true
-                    nameLabel.Font = Enum.Font.SourceSansBold
-                    nameLabel.Parent = gui
-
-                    local distLabel = Instance.new("TextLabel")
-                    distLabel.Size = UDim2.new(1, 0, 0.5, 0)
-                    distLabel.Position = UDim2.new(0, 0, 0.5, 0)
-                    distLabel.BackgroundTransparency = 1
-                    distLabel.Text = math.floor(dist) .. "m"
-                    distLabel.TextColor3 = Color3.new(1, 1, 0)
-                    distLabel.TextScaled = true
-                    distLabel.Font = Enum.Font.SourceSans
-                    distLabel.Parent = gui
-
-                    espGuis[p.Name] = gui
-                else
-                    local nameLabel = gui:FindFirstChild("TextLabel")
-                    if nameLabel then
-                        nameLabel.TextColor3 = isEnemy(p) and Color3.new(1, 0, 0) or Color3.new(0, 0, 1)
-                    end
-                    local distLabel = gui:FindFirstChildOfClass("TextLabel", true)
-                    if distLabel then distLabel.Text = math.floor(dist) .. "m" end
+                local box = espBoxes[p.Name]
+                if not box then
+                    box = Drawing.new("Square")
+                    box.Color = Color3.new(1, 1, 1)  -- White box
+                    box.Thickness = 2
+                    box.Filled = false
+                    box.Transparency = 0.5
+                    box.Visible = true
+                    espBoxes[p.Name] = box
+                    printDebug("White box ESP drawn on " .. p.Name .. " at " .. math.floor(dist) .. "m")
                 end
-            elseif espGuis[p.Name] then
-                espGuis[p.Name]:Destroy()
-                espGuis[p.Name] = nil
+                -- Update box position/size (simple 2D projection)
+                local corners = {p.Character.HumanoidRootPart.Position + Vector3.new(-2, 3, 0), p.Character.HumanoidRootPart.Position + Vector3.new(2, 3, 0), p.Character.HumanoidRootPart.Position + Vector3.new(2, -3, 0), p.Character.HumanoidRootPart.Position + Vector3.new(-2, -3, 0)}
+                local screenPos1, onScreen1 = camera:WorldToViewportPoint(corners[1])
+                local screenPos2, onScreen2 = camera:WorldToViewportPoint(corners[3])
+                if onScreen1 and onScreen2 then
+                    local size = Vector2.new(math.abs(screenPos2.X - screenPos1.X), math.abs(screenPos2.Y - screenPos1.Y))
+                    box.Size = size
+                    box.Position = Vector2.new(screenPos1.X, screenPos1.Y)
+                end
+            elseif espBoxes[p.Name] then
+                espBoxes[p.Name]:Remove()
+                espBoxes[p.Name] = nil
             end
         end
     end
@@ -214,24 +193,6 @@ local function updateMovement()
         humanoid.WalkSpeed = 16 * settings.movement.speedMultiplier
     end
 
-    if settings.movement.fly then
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
-            local bodyVel = root:FindFirstChild("FlyBodyVelocity")
-            if not bodyVel then
-                bodyVel = Instance.new("BodyVelocity")
-                bodyVel.MaxForce = Vector3.new(4000, 4000, 4000)
-                bodyVel.Velocity = Vector3.new(0, 50, 0)
-                bodyVel.Parent = root
-            end
-            bodyVel.Velocity = Vector3.new(0, 50, 0)
-            humanoid.PlatformStand = true
-        else
-            local bodyVel = root:FindFirstChild("FlyBodyVelocity")
-            if bodyVel then bodyVel:Destroy() end
-            humanoid.PlatformStand = false
-        end
-    end
-
     if settings.movement.bunnyHop then
         humanoid.JumpPower = settings.movement.bunnyStrength
         if humanoid.FloorMaterial ~= Enum.Material.Air and humanoid.MoveDirection.Magnitude > 0 then
@@ -241,25 +202,28 @@ local function updateMovement()
 end
 
 local function updateAimCircle()
-    if not settings.aimCircle.enabled then return end
-    pcall(function()
-        local circle = Drawing.new("Circle")
-        circle.Radius = settings.aimCircle.radius
-        circle.Color = Color3.new(0, 1, 0)
-        circle.Thickness = settings.aimCircle.thickness
-        circle.Position = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
-        circle.Visible = true
-        circle.Filled = false
-        circle.NumSides = 32
-        circle.Transparency = 0.5
-        connections.circleUpdate = RunService.Heartbeat:Connect(function()  -- Heartbeat for lag
-            circle.Position = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
-        end)
-    end)
+    if not settings.aimCircle.enabled then
+        if aimCircleInstance then
+            aimCircleInstance:Remove()
+            aimCircleInstance = nil
+        end
+        return
+    end
+    if not aimCircleInstance then
+        aimCircleInstance = Drawing.new("Circle")
+        aimCircleInstance.Color = Color3.new(0, 1, 0)
+        aimCircleInstance.Thickness = settings.aimCircle.thickness
+        aimCircleInstance.Filled = false
+        aimCircleInstance.NumSides = 32
+        aimCircleInstance.Transparency = 0.5
+        aimCircleInstance.Visible = true
+    end
+    aimCircleInstance.Radius = settings.aimCircle.radius
+    aimCircleInstance.Position = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
 end
 
 local function aimLock()
-    if UserInputService:IsKeyDown(keybinds.aimLock) then  -- Manual snap on Shift
+    if UserInputService:IsKeyDown(keybinds.aimLock) then  -- Manual snap
         local manualTarget = getClosestPlayer(settings.aimbot.fov)
         if manualTarget and manualTarget.Character then
             local targetPart = manualTarget.Character:FindFirstChild(settings.aimbot.targetPart)
@@ -273,13 +237,12 @@ local function aimLock()
     end
 end
 
--- Main Loops (Heartbeat for lag reduction)
+-- Main Loops (All Heartbeat for lag)
 connections.updateAimbot = RunService.Heartbeat:Connect(updateAimbot)
 connections.updateESP = RunService.Heartbeat:Connect(updateESP)
 connections.updateMovement = RunService.Heartbeat:Connect(updateMovement)
-connections.aimLock = RunService.RenderStepped:Connect(aimLock)  -- Keep Render for manual snap
+connections.aimLock = RunService.RenderStepped:Connect(aimLock)
 connections.updateAimCircle = RunService.Heartbeat:Connect(updateAimCircle)
-connections.updateTriggerBot = RunService.Heartbeat:Connect(updateTriggerBot)
 connections.updateAntiBlind = RunService.Heartbeat:Connect(updateAntiBlind)
 
 -- Cleanup on disable
@@ -288,21 +251,27 @@ local function cleanup()
         if conn then conn:Disconnect() end
     end
     connections = {}
-    for _, gui in pairs(espGuis) do gui:Destroy() end
-    espGuis = {}
+    for _, box in pairs(espBoxes) do
+        if box then box:Remove() end
+    end
+    espBoxes = {}
     for _, hook in pairs(remoteHooks) do
         if hook.remote and hook.original then hook.remote.FireServer = hook.original end
     end
     remoteHooks = {}
+    if aimCircleInstance then
+        aimCircleInstance:Remove()
+        aimCircleInstance = nil
+    end
 end
 
--- UI Panel
+-- UI Panel (removed Fly/Trigger, added Max Dist slider)
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "KING_UI"
 screenGui.Parent = game.CoreGui
 
 local panel = Instance.new("Frame")
-panel.Size = UDim2.new(0, 250, 0, 480)
+panel.Size = UDim2.new(0, 250, 0, 420)  -- Adjusted size
 panel.Position = UDim2.new(0.1, 0, 0.1, 0)
 panel.BackgroundColor3 = Color3.fromRGB(75, 0, 130)
 panel.BorderSizePixel = 2
@@ -334,7 +303,7 @@ local function addToggle(name, setting, callback)
         setting = not setting
         toggle.Text = name .. ": " .. (setting and "On" or "Off")
         callback(setting)
-        if not setting then cleanup() end  -- Cleanup on disable for lag
+        if not setting then cleanup() end  -- Auto-cleanup
     end)
     yPos = yPos + 30
 end
@@ -384,21 +353,19 @@ local function addSlider(name, value, min, max, callback)
     yPos = yPos + 30
 end
 
--- Controls
+-- Controls (no Fly/Trigger, white box ESP at 120m)
 addToggle("Aimbot (Visible Only)", settings.aimbot.enabled, function(v) settings.aimbot.enabled = v end)
 addSlider("Smoothness", settings.aimbot.smoothness, 0, 100, function(v) settings.aimbot.smoothness = v end)
 addSlider("FOV", settings.aimbot.fov, 0, 180, function(v) settings.aimbot.fov = v end)
-addSlider("Max Distance", settings.aimbot.maxDist, 50, 500, function(v) settings.aimbot.maxDist = v end)  -- New: Close limit
+addSlider("Max Distance", settings.aimbot.maxDist, 50, 500, function(v) settings.aimbot.maxDist = v end)
 addToggle("Gun Sync (Silent Aim)", settings.gunSync, function(v) settings.gunSync = v end)
-addToggle("Trigger Bot", settings.triggerBot, function(v) settings.triggerBot = v end)
 addToggle("Anti-Blind", settings.antiBlind, function(v) settings.antiBlind = v end)
-addToggle("ESP", settings.esp.enabled, function(v) settings.esp.enabled = v end)
-addSlider("ESP Distance", settings.esp.distance, 10, 500, function(v) settings.esp.distance = v end)
+addToggle("ESP (White Box)", settings.esp.enabled, function(v) settings.esp.enabled = v end)
+addSlider("ESP Distance", settings.esp.distance, 10, 120, function(v) settings.esp.distance = v end)  -- Capped at 120
 addToggle("Wall Check", settings.esp.wallCheck, function(v) settings.esp.wallCheck = v end)
 addToggle("Team ESP (Blue)", settings.esp.showTeam, function(v) settings.esp.showTeam = v end)
 addToggle("Speed Hack", settings.movement.speedHack, function(v) settings.movement.speedHack = v end)
 addSlider("Speed Multi", settings.movement.speedMultiplier, 1, 5, function(v) settings.movement.speedMultiplier = v end)
-addToggle("Fly", settings.movement.fly, function(v) settings.movement.fly = v end)
 addToggle("Bunny Hop", settings.movement.bunnyHop, function(v) settings.movement.bunnyHop = v end)
 addSlider("Bunny Strength", settings.movement.bunnyStrength, 0, 100, function(v) settings.movement.bunnyStrength = v end)
 addToggle("Aim Circle", settings.aimCircle.enabled, function(v) settings.aimCircle.enabled = v end)
@@ -412,4 +379,4 @@ UserInputService.InputBegan:Connect(function(input, processed)
     end
 end)
 
-printDebug("KING Rivals script loaded - Visibility aimlock + lag fix (Oct 23, 2025)!")
+printDebug("KING Rivals script loaded - Lag fixed, white box ESP (120m max), circle cleanup!")
