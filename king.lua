@@ -1,22 +1,21 @@
--- KING Rivals Cheat Script (Team Check Fixed)
+-- KING Rivals Cheat Script (Visibility Aimlock + Lag Optimized)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local localPlayer = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 local mouse = localPlayer:GetMouse()
 
--- Settings (Rivals-tuned defaults)
+-- Settings (Rivals-tuned, lag-optimized)
 local settings = {
-    aimbot = {enabled = false, smoothness = 20, fov = 90, targetPart = "Head"},
-    esp = {enabled = false, distance = 200, wallCheck = true, showTeam = false},  -- New: showTeam for blue teammate ESP
+    aimbot = {enabled = false, smoothness = 20, fov = 90, targetPart = "Head", maxDist = 200},  -- Close + visible only
+    esp = {enabled = false, distance = 200, wallCheck = true, showTeam = false},
     movement = {speedHack = false, speedMultiplier = 1.5, fly = false, bunnyHop = false, bunnyStrength = 60},
     aimCircle = {enabled = false, radius = 30, thickness = 2},
-    gunSync = true,  -- Silent aim + rotation
-    triggerBot = false,  -- Auto-fire on target
-    antiBlind = true  -- Disable flashes/smoke
+    gunSync = true,
+    triggerBot = false,
+    antiBlind = true
 }
 
 local keybinds = {aimLock = Enum.KeyCode.LeftShift, menuToggle = Enum.KeyCode.RightAlt}
@@ -24,45 +23,54 @@ local connections = {}
 local espGuis = {}
 local remoteHooks = {}
 local currentTarget = nil
+local raycastParams = RaycastParams.new()  -- Cached for lag reduction
+raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+raycastParams.FilterDescendantsInstances = {localPlayer.Character}
 
 local function printDebug(msg)
     print("[KING Rivals] " .. msg)
 end
 
 local function isEnemy(player)
-    if not localPlayer.Team then return true end  -- No teams = target all
+    if not localPlayer.Team then return true end
     return player.Team ~= localPlayer.Team
 end
 
-local function raycastWallCheck(startPos, endPos)
-    local ray = workspace:Raycast(startPos, (endPos - startPos).Unit * (endPos - startPos).Magnitude)
+local function raycastVisible(startPos, endPos, ignoreList)
+    raycastParams.FilterDescendantsInstances = ignoreList or {localPlayer.Character}
+    local ray = workspace:Raycast(startPos, (endPos - startPos), raycastParams)
     return not ray or ray.Instance:IsDescendantOf(currentTarget and currentTarget.Character or workspace)
 end
 
 local function getClosestPlayer(fov)
     local origin = camera.CFrame.Position
-    local closest, minDist = nil, math.huge
+    local candidates = {}
     for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= localPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health > 0 and isEnemy(p) then  -- Team check added
+        if p ~= localPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health > 0 and isEnemy(p) then  -- Team check
             local root = p.Character.HumanoidRootPart
             local dist = (root.Position - origin).Magnitude
-            local screenPos, onScreen = camera:WorldToViewportPoint(root.Position)
-            local angle = math.deg(math.asin(math.clamp((Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(mouse.X, mouse.Y)).Magnitude / 2 / math.tan(math.rad(camera.FieldOfView / 2)), 0, 1)))
-            local visible = not settings.esp.wallCheck or raycastWallCheck(origin, root.Position)
-            if onScreen and angle <= fov and visible and dist < minDist and dist <= 500 then
-                minDist = dist
-                closest = p
-            elseif not isEnemy(p) then
-                printDebug("Skipped teammate: " .. p.Name)
+            if dist <= settings.aimbot.maxDist then  -- Close only
+                local screenPos, onScreen = camera:WorldToViewportPoint(root.Position)
+                local angle = math.deg(math.asin(math.clamp((Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(mouse.X, mouse.Y)).Magnitude / 2 / math.tan(math.rad(camera.FieldOfView / 2)), 0, 1)))
+                local visible = raycastVisible(origin, root.Position, {p.Character})  -- Visibility check
+                if onScreen and angle <= fov and visible then
+                    table.insert(candidates, {player = p, dist = dist})
+                elseif not isEnemy(p) then
+                    printDebug("Skipped teammate: " .. p.Name)
+                elseif not visible then
+                    printDebug("Skipped wall-blocked: " .. p.Name)
+                end
             end
         end
     end
-    return closest
+    -- Sort by distance (closest first)
+    table.sort(candidates, function(a, b) return a.dist < b.dist end)
+    return candidates[1] and candidates[1].player or nil
 end
 
 local function hookFiringRemote(tool, targetPart)
     if not tool or not settings.gunSync then return end
-    local remoteNames = {"Fire", "Shoot", "RemoteEvent", "OnFire", "Bullet", "FireServer"}  -- Rivals common remotes
+    local remoteNames = {"Fire", "Shoot", "RemoteEvent", "OnFire", "Bullet", "FireServer"}
     for _, name in ipairs(remoteNames) do
         local remote = tool:FindFirstChild(name) or ReplicatedStorage:FindFirstChild(name) or tool.Parent:FindFirstChild(name)
         if remote and remote:IsA("RemoteEvent") then
@@ -71,7 +79,7 @@ local function hookFiringRemote(tool, targetPart)
                 local args = {...}
                 if targetPart and currentTarget then
                     local dist = (targetPart.Position - camera.CFrame.Position).Magnitude
-                    local predicted = targetPart.Position + (targetPart.Velocity * (dist / 800))  -- Rivals bullet speed ~800
+                    local predicted = targetPart.Position + (targetPart.Velocity * (dist / 800))
                     if typeof(args[1]) == "Vector3" then
                         args[1] = predicted
                     elseif typeof(args[1]) == "CFrame" then
@@ -90,14 +98,12 @@ local function syncGunToTarget(targetPart, tool)
     if not tool or not settings.gunSync then return end
     local handle = tool:FindFirstChild("Handle") or tool:FindFirstChildOfClass("Part")
     if handle then
-        local tweenInfo = TweenInfo.new(0.05, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)  -- Faster for Rivals
+        -- Direct CFrame (no tween for lag reduction)
         local lookCFrame = CFrame.lookAt(handle.Position, targetPart.Position)
-        local tween = TweenService:Create(handle, tweenInfo, {CFrame = lookCFrame})
-        tween:Play()
+        handle.CFrame = lookCFrame
         hookFiringRemote(tool, targetPart)
-        -- Recoil reset for Rivals guns
         pcall(function() handle.Recoil.Value = 0 end)
-        printDebug("Gun synced + hooked for " .. targetPart.Parent.Name)
+        printDebug("Gun direct-synced for " .. targetPart.Parent.Name)
     end
     mouse.Hit = CFrame.lookAt(Vector3.new(), targetPart.Position)
 end
@@ -109,30 +115,30 @@ local function updateAimbot()
         local targetPart = currentTarget.Character:FindFirstChild(settings.aimbot.targetPart)
         if targetPart then
             local dist = (targetPart.Position - camera.CFrame.Position).Magnitude
-            local predictedPos = targetPart.Position + (currentTarget.Character.HumanoidRootPart.Velocity * (dist / 800))  -- Rivals bullet speed ~800
+            local predictedPos = targetPart.Position + (currentTarget.Character.HumanoidRootPart.Velocity * (dist / 800))
             local aimDir = (predictedPos - camera.CFrame.Position).Unit
             local currentDir = camera.CFrame.LookVector
             local lerpDir = currentDir:lerp(aimDir, settings.aimbot.smoothness / 100)
             camera.CFrame = CFrame.lookAt(camera.CFrame.Position, camera.CFrame.Position + lerpDir)
             local tool = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Tool")
             syncGunToTarget(targetPart, tool)
+            printDebug("Auto-locked on visible enemy " .. currentTarget.Name .. " at " .. math.floor(dist) .. "m")
         end
     end
 end
 
 local function updateTriggerBot()
     if not settings.triggerBot then return end
-    local target = getClosestPlayer(5)  -- Small FOV for trigger, with team check
+    local target = getClosestPlayer(5)  -- Small FOV, visibility + team check
     if target and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
         local tool = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Tool")
         if tool then tool:Activate() end
-        printDebug("Trigger bot fired on enemy " .. target.Name)
+        printDebug("Trigger bot fired on visible enemy " .. target.Name)
     end
 end
 
 local function updateAntiBlind()
     if not settings.antiBlind then return end
-    -- Clear screen effects (flashes, smoke in Rivals)
     for _, effect in ipairs(workspace:GetDescendants()) do
         if effect:IsA("Explosion") or effect:IsA("Fire") or effect:IsA("Smoke") then
             if (effect.Position - localPlayer.Character.HumanoidRootPart.Position).Magnitude < 50 then
@@ -151,8 +157,8 @@ local function updateESP()
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= localPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
             local dist = (p.Character.HumanoidRootPart.Position - camera.CFrame.Position).Magnitude
-            local visible = not settings.esp.wallCheck or raycastWallCheck(camera.CFrame.Position, p.Character.HumanoidRootPart.Position)
-            local show = settings.esp.showTeam or isEnemy(p)  -- Show teammates only if toggled
+            local visible = not settings.esp.wallCheck or raycastVisible(camera.CFrame.Position, p.Character.HumanoidRootPart.Position, {p.Character})
+            local show = settings.esp.showTeam or isEnemy(p)
             if dist <= settings.esp.distance and visible and show then
                 local gui = espGuis[p.Name]
                 if not gui then
@@ -166,7 +172,7 @@ local function updateESP()
                     nameLabel.Size = UDim2.new(1, 0, 0.5, 0)
                     nameLabel.BackgroundTransparency = 1
                     nameLabel.Text = p.Name
-                    nameLabel.TextColor3 = isEnemy(p) and Color3.new(1, 0, 0) or Color3.new(0, 0, 1)  -- Red for enemy, blue for team
+                    nameLabel.TextColor3 = isEnemy(p) and Color3.new(1, 0, 0) or Color3.new(0, 0, 1)
                     nameLabel.TextScaled = true
                     nameLabel.Font = Enum.Font.SourceSansBold
                     nameLabel.Parent = gui
@@ -246,45 +252,57 @@ local function updateAimCircle()
         circle.Filled = false
         circle.NumSides = 32
         circle.Transparency = 0.5
-        connections.circleUpdate = RunService.RenderStepped:Connect(function()
+        connections.circleUpdate = RunService.Heartbeat:Connect(function()  -- Heartbeat for lag
             circle.Position = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
         end)
     end)
 end
 
 local function aimLock()
-    if UserInputService:IsKeyDown(keybinds.aimLock) then
-        currentTarget = getClosestPlayer(settings.aimbot.fov)  -- Team check here
-        if currentTarget and currentTarget.Character then
-            local targetPart = currentTarget.Character:FindFirstChild(settings.aimbot.targetPart)
+    if UserInputService:IsKeyDown(keybinds.aimLock) then  -- Manual snap on Shift
+        local manualTarget = getClosestPlayer(settings.aimbot.fov)
+        if manualTarget and manualTarget.Character then
+            local targetPart = manualTarget.Character:FindFirstChild(settings.aimbot.targetPart)
             if targetPart then
                 camera.CFrame = CFrame.lookAt(camera.CFrame.Position, targetPart.Position)
                 local tool = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Tool")
                 syncGunToTarget(targetPart, tool)
-                printDebug("Rivals aimlock active on enemy " .. currentTarget.Name)
+                printDebug("Manual snap on visible enemy " .. manualTarget.Name)
             end
         end
-    else
-        currentTarget = nil
     end
 end
 
--- Main Loops
-connections.updateAimbot = RunService.RenderStepped:Connect(updateAimbot)
+-- Main Loops (Heartbeat for lag reduction)
+connections.updateAimbot = RunService.Heartbeat:Connect(updateAimbot)
 connections.updateESP = RunService.Heartbeat:Connect(updateESP)
 connections.updateMovement = RunService.Heartbeat:Connect(updateMovement)
-connections.aimLock = RunService.RenderStepped:Connect(aimLock)
+connections.aimLock = RunService.RenderStepped:Connect(aimLock)  -- Keep Render for manual snap
 connections.updateAimCircle = RunService.Heartbeat:Connect(updateAimCircle)
 connections.updateTriggerBot = RunService.Heartbeat:Connect(updateTriggerBot)
 connections.updateAntiBlind = RunService.Heartbeat:Connect(updateAntiBlind)
 
--- UI Panel (added Team ESP toggle)
+-- Cleanup on disable
+local function cleanup()
+    for _, conn in pairs(connections) do
+        if conn then conn:Disconnect() end
+    end
+    connections = {}
+    for _, gui in pairs(espGuis) do gui:Destroy() end
+    espGuis = {}
+    for _, hook in pairs(remoteHooks) do
+        if hook.remote and hook.original then hook.remote.FireServer = hook.original end
+    end
+    remoteHooks = {}
+end
+
+-- UI Panel
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "KING_UI"
 screenGui.Parent = game.CoreGui
 
 local panel = Instance.new("Frame")
-panel.Size = UDim2.new(0, 250, 0, 480)  -- Taller for new toggle
+panel.Size = UDim2.new(0, 250, 0, 480)
 panel.Position = UDim2.new(0.1, 0, 0.1, 0)
 panel.BackgroundColor3 = Color3.fromRGB(75, 0, 130)
 panel.BorderSizePixel = 2
@@ -316,6 +334,7 @@ local function addToggle(name, setting, callback)
         setting = not setting
         toggle.Text = name .. ": " .. (setting and "On" or "Off")
         callback(setting)
+        if not setting then cleanup() end  -- Cleanup on disable for lag
     end)
     yPos = yPos + 30
 end
@@ -365,17 +384,18 @@ local function addSlider(name, value, min, max, callback)
     yPos = yPos + 30
 end
 
--- Controls (added Team ESP toggle)
-addToggle("Aimbot", settings.aimbot.enabled, function(v) settings.aimbot.enabled = v end)
+-- Controls
+addToggle("Aimbot (Visible Only)", settings.aimbot.enabled, function(v) settings.aimbot.enabled = v end)
 addSlider("Smoothness", settings.aimbot.smoothness, 0, 100, function(v) settings.aimbot.smoothness = v end)
 addSlider("FOV", settings.aimbot.fov, 0, 180, function(v) settings.aimbot.fov = v end)
+addSlider("Max Distance", settings.aimbot.maxDist, 50, 500, function(v) settings.aimbot.maxDist = v end)  -- New: Close limit
 addToggle("Gun Sync (Silent Aim)", settings.gunSync, function(v) settings.gunSync = v end)
 addToggle("Trigger Bot", settings.triggerBot, function(v) settings.triggerBot = v end)
 addToggle("Anti-Blind", settings.antiBlind, function(v) settings.antiBlind = v end)
 addToggle("ESP", settings.esp.enabled, function(v) settings.esp.enabled = v end)
 addSlider("ESP Distance", settings.esp.distance, 10, 500, function(v) settings.esp.distance = v end)
 addToggle("Wall Check", settings.esp.wallCheck, function(v) settings.esp.wallCheck = v end)
-addToggle("Team ESP (Blue)", settings.esp.showTeam, function(v) settings.esp.showTeam = v end)  -- New toggle
+addToggle("Team ESP (Blue)", settings.esp.showTeam, function(v) settings.esp.showTeam = v end)
 addToggle("Speed Hack", settings.movement.speedHack, function(v) settings.movement.speedHack = v end)
 addSlider("Speed Multi", settings.movement.speedMultiplier, 1, 5, function(v) settings.movement.speedMultiplier = v end)
 addToggle("Fly", settings.movement.fly, function(v) settings.movement.fly = v end)
@@ -392,4 +412,4 @@ UserInputService.InputBegan:Connect(function(input, processed)
     end
 end)
 
-printDebug("KING Rivals script loaded - Team check active (no friendly fire)!")
+printDebug("KING Rivals script loaded - Visibility aimlock + lag fix (Oct 23, 2025)!")
