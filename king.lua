@@ -1,4 +1,4 @@
--- KING Ultra High FPS Script (500+ FPS RenderStepped)
+-- KING Ultra High FPS Script (Dead Body Fix)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -9,7 +9,7 @@ local mouse = localPlayer:GetMouse()
 
 -- Settings (Ultra FPS optimized)
 local settings = {
-    aimbot = {enabled = false, smoothness = 15, fov = 90, targetPart = "Head", maxDist = 200},  -- Lower smoothness = snappier
+    aimbot = {enabled = false, smoothness = 15, fov = 90, targetPart = "Head", maxDist = 200},
     esp = {enabled = false, distance = 120, wallCheck = true, showTeam = false},
     movement = {speedHack = false, speedMultiplier = 1.5, bunnyHop = false, bunnyStrength = 60},
     aimCircle = {enabled = false, radius = 30, thickness = 2},
@@ -46,7 +46,7 @@ local function getClosestPlayer(fov)
     local origin = camera.CFrame.Position
     local candidates = {}
     local playerList = Players:GetPlayers()
-    for i = 1, math.min(12, #playerList) do  -- Ultra-optimized: 12 max
+    for i = 1, math.min(12, #playerList) do
         local p = playerList[i]
         if p ~= localPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health > 0 and isEnemy(p) then
             local root = p.Character.HumanoidRootPart
@@ -74,7 +74,7 @@ local function hookFiringRemote(tool, targetPart)
             local originalFire = remote.FireServer
             remote.FireServer = function(self, ...)
                 local args = {...}
-                if targetPart and currentTarget then
+                if targetPart and currentTarget and currentTarget.Character and currentTarget.Character:FindFirstChild("Humanoid") and currentTarget.Character.Humanoid.Health > 0 then
                     local dist = (targetPart.Position - camera.CFrame.Position).Magnitude
                     local predicted = targetPart.Position + (targetPart.Velocity * (dist / 1200))
                     if typeof(args[1]) == "Vector3" then
@@ -106,7 +106,7 @@ local function updateAimbot()
     currentTarget = getClosestPlayer(settings.aimbot.fov)
     if currentTarget and currentTarget.Character then
         local targetPart = currentTarget.Character:FindFirstChild(settings.aimbot.targetPart)
-        if targetPart then
+        if targetPart and currentTarget.Character.Humanoid.Health > 0 then
             local dist = (targetPart.Position - camera.CFrame.Position).Magnitude
             local predictedPos = targetPart.Position + (currentTarget.Character.HumanoidRootPart.Velocity * (dist / 1200))
             local aimDir = (predictedPos - camera.CFrame.Position).Unit
@@ -115,13 +115,17 @@ local function updateAimbot()
             camera.CFrame = CFrame.lookAt(camera.CFrame.Position, camera.CFrame.Position + lerpDir)
             local tool = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Tool")
             syncGunToTarget(targetPart, tool)
+        elseif currentTarget and currentTarget.Character.Humanoid.Health <= 0 then
+            currentTarget = nil
+            camera.CFrame = CFrame.lookAt(camera.CFrame.Position, camera.CFrame.Position + camera.CFrame.LookVector)  -- Reset to forward
+            printDebug("Target " .. (currentTarget and currentTarget.Name or "unknown") .. " died, reset aim")
         end
     end
 end
 
 local function updateAntiBlind()
     if not settings.antiBlind then return end
-    for _, effect in ipairs(workspace:GetChildren()) do  -- Faster: GetChildren not GetDescendants
+    for _, effect in ipairs(workspace:GetChildren()) do
         if effect:IsA("Explosion") or effect:IsA("Fire") or effect:IsA("Smoke") then
             if localPlayer.Character and (effect.Position - localPlayer.Character.HumanoidRootPart.Position).Magnitude < 50 then
                 effect.Transparency = 1
@@ -141,7 +145,7 @@ local function updateESP()
     local playerList = Players:GetPlayers()
     for i = 1, math.min(10, #playerList) do
         local p = playerList[i]
-        if p ~= localPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+        if p ~= localPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health > 0 then
             local dist = (p.Character.HumanoidRootPart.Position - camera.CFrame.Position).Magnitude
             if dist <= settings.esp.distance then
                 local visible = not settings.esp.wallCheck or raycastVisible(camera.CFrame.Position, p.Character.HumanoidRootPart.Position)
@@ -157,7 +161,6 @@ local function updateESP()
                         box.Visible = true
                         espBoxes[p.Name] = box
                     end
-                    -- Ultra-fast 2D projection
                     local cframe, onScreen = camera:WorldToViewportPoint(p.Character.HumanoidRootPart.Position, camera.CFrame)
                     if onScreen then
                         local scale = 1200 / cframe.Z
@@ -219,7 +222,7 @@ local function aimLock()
         local manualTarget = getClosestPlayer(settings.aimbot.fov)
         if manualTarget and manualTarget.Character then
             local targetPart = manualTarget.Character:FindFirstChild(settings.aimbot.targetPart)
-            if targetPart then
+            if targetPart and manualTarget.Character.Humanoid.Health > 0 then
                 camera.CFrame = CFrame.lookAt(camera.CFrame.Position, targetPart.Position)
                 local tool = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Tool")
                 syncGunToTarget(targetPart, tool)
@@ -370,4 +373,4 @@ UserInputService.InputBegan:Connect(function(input, processed)
     end
 end)
 
-printDebug("KING Ultra FPS loaded - 500+ FPS RenderStepped (High-end PC optimized)!")
+printDebug("KING Ultra FPS loaded - Dead body fix applied (Oct 24, 2025)!")
