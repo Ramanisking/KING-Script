@@ -1,17 +1,19 @@
--- KING Functional Cheat Script (Updated for Reliability)
+-- KING Functional Cheat Script (Gun Sync Fixed)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local localPlayer = Players.LocalPlayer
 local camera = workspace.CurrentCamera
+local mouse = localPlayer:GetMouse()
 
 -- Settings
 local settings = {
     aimbot = {enabled = false, smoothness = 50, fov = 100, targetPart = "Head"},
     esp = {enabled = false, distance = 120},
     movement = {speedHack = false, speedMultiplier = 2, fly = false, bunnyHop = false, bunnyStrength = 50},
-    aimCircle = {enabled = false, radius = 50, thickness = 2}
+    aimCircle = {enabled = false, radius = 50, thickness = 2},
+    gunSync = true  -- New: Enable gun direction sync
 }
 
 local keybinds = {aimLock = Enum.KeyCode.LeftShift, menuToggle = Enum.KeyCode.RightAlt}
@@ -23,7 +25,6 @@ local function printDebug(msg)
 end
 
 local function getClosestPlayer(fov)
-    local mouse = localPlayer:GetMouse()
     local origin = camera.CFrame.Position
     local closest, minDist = nil, math.huge
     for _, p in ipairs(Players:GetPlayers()) do
@@ -41,6 +42,18 @@ local function getClosestPlayer(fov)
     return closest
 end
 
+local function syncGunToTarget(targetPart, tool)
+    if not tool or not settings.gunSync then return end
+    local handle = tool:FindFirstChild("Handle") or tool:FindFirstChildOfClass("Part")
+    if handle then
+        local lookDir = (targetPart.Position - handle.Position).Unit
+        handle.CFrame = CFrame.lookAt(handle.Position, handle.Position + lookDir)
+        printDebug("Gun synced to target")
+    end
+    -- Silent aim: Override mouse hit for tool raycast
+    mouse.Hit = CFrame.lookAt(Vector3.new(), targetPart.Position)
+end
+
 local function updateAimbot()
     if not settings.aimbot.enabled then return end
     local target = getClosestPlayer(settings.aimbot.fov)
@@ -52,7 +65,9 @@ local function updateAimbot()
             local currentDir = camera.CFrame.LookVector
             local lerpDir = currentDir:lerp(aimDir, settings.aimbot.smoothness / 100)
             camera.CFrame = CFrame.lookAt(camera.CFrame.Position, camera.CFrame.Position + lerpDir)
-            printDebug("Aimbot locked on " .. target.Name)
+            -- Sync gun if tool equipped
+            local tool = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Tool")
+            syncGunToTarget(targetPart, tool)
         end
     end
 end
@@ -150,7 +165,7 @@ local function updateAimCircle()
     pcall(function()
         local circle = Drawing.new("Circle")
         circle.Radius = settings.aimCircle.radius
-        circle.Color = settings.aimCircle.color or Color3.new(0, 1, 0)
+        circle.Color = Color3.new(0, 1, 0)
         circle.Thickness = settings.aimCircle.thickness
         circle.Position = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
         circle.Visible = true
@@ -172,7 +187,10 @@ local function aimLock()
             local targetPart = target.Character:FindFirstChild(settings.aimbot.targetPart)
             if targetPart then
                 camera.CFrame = CFrame.lookAt(camera.CFrame.Position, targetPart.Position)
-                printDebug("Aim locked on " .. target.Name)
+                -- Sync gun during hold
+                local tool = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Tool")
+                syncGunToTarget(targetPart, tool)
+                printDebug("Aim locked + gun synced to " .. target.Name)
             end
         end
     end
@@ -185,13 +203,13 @@ connections.updateMovement = RunService.Heartbeat:Connect(updateMovement)
 connections.aimLock = RunService.RenderStepped:Connect(aimLock)
 connections.updateAimCircle = RunService.Heartbeat:Connect(updateAimCircle)
 
--- UI Panel
+-- UI Panel (same as before, with gun sync toggle added)
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "KING_UI"
 screenGui.Parent = game.CoreGui
 
 local panel = Instance.new("Frame")
-panel.Size = UDim2.new(0, 250, 0, 350)
+panel.Size = UDim2.new(0, 250, 0, 380)  -- Slightly taller for new toggle
 panel.Position = UDim2.new(0.1, 0, 0.1, 0)
 panel.BackgroundColor3 = Color3.fromRGB(75, 0, 130)
 panel.BorderSizePixel = 2
@@ -272,10 +290,11 @@ local function addSlider(name, value, min, max, callback)
     yPos = yPos + 30
 end
 
--- Add Controls
+-- Add Controls (gun sync toggle added)
 addToggle("Aimbot", settings.aimbot.enabled, function(v) settings.aimbot.enabled = v end)
 addSlider("Smoothness", settings.aimbot.smoothness, 0, 100, function(v) settings.aimbot.smoothness = v end)
 addSlider("FOV", settings.aimbot.fov, 0, 360, function(v) settings.aimbot.fov = v end)
+addToggle("Gun Sync", settings.gunSync, function(v) settings.gunSync = v end)  -- New toggle
 addToggle("ESP", settings.esp.enabled, function(v) settings.esp.enabled = v end)
 addSlider("ESP Distance", settings.esp.distance, 10, 500, function(v) settings.esp.distance = v end)
 addToggle("Speed Hack", settings.movement.speedHack, function(v) settings.movement.speedHack = v end)
@@ -294,4 +313,4 @@ UserInputService.InputBegan:Connect(function(input, processed)
     end
 end)
 
-printDebug("KING fully loaded and functional!")
+printDebug("KING loaded with gun sync fix!")
